@@ -1,0 +1,41 @@
+name: Refresh ChatGPT feed
+
+on:
+  schedule:
+    - cron: "17 * * * *" # hourly
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download feed from Shopify
+        run: |
+          curl -sSf --retry 3 --retry-delay 20 -A "BeyondShakersFeedBot/1.0" \
+            https://beyondshakers.com/pages/chatgpt-feed -o raw.csv
+          # Drop blank lines Liquid leaves behind
+          grep -v '^[[:space:]]*$' raw.csv > new.csv
+          rm raw.csv
+
+      - name: Sanity check
+        run: |
+          head -1 new.csv | grep -q '^item_id,title,description,url,brand,seller_name' \
+            || { echo "Header missing - not publishing"; exit 1; }
+          rows=$(($(wc -l < new.csv) - 1))
+          echo "Rows: $rows"
+          [ "$rows" -ge 10 ] || { echo "Too few rows - not publishing"; exit 1; }
+
+      - name: Publish if changed
+        run: |
+          mv new.csv chatgpt-feed.csv
+          date -u +%Y-%m-%d > last-checked.txt
+          git config user.name "feed-bot"
+          git config user.email "feed-bot@users.noreply.github.com"
+          git add chatgpt-feed.csv last-checked.txt
+          git diff --cached --quiet || git commit -m "Refresh feed $(date -u +%FT%TZ)"
+          git push
